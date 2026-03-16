@@ -8,14 +8,6 @@ Archon is Cole Medin's "Operating System for AI Coding" — a RAG knowledge base
 
 ---
 
-## Workflow Rules
-
-- **ALWAYS pull before working**: Run `git pull --rebase` before making any changes (both `origin` and check `upstream` for Archon updates).
-- **ALWAYS commit and push after making changes.** Stage specific files, commit with conventional commits, push immediately.
-- **Never use `git add .` or `git add -A`** — always add specific files by name.
-- Commit message format: conventional commits (feat:, fix:, chore:, docs:). Always include `Co-Authored-By: Claude <noreply@anthropic.com>`.
-- **Upstream sync**: `git fetch upstream && git merge upstream/main` to get Archon updates from Cole's repo.
-
 ---
 
 ## Tech Stack
