@@ -1,334 +1,294 @@
-# CLAUDE.md
+# Archon — AI Coding OS
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Project Overview
 
-## Beta Development Guidelines
+Archon is Cole Medin's "Operating System for AI Coding" — a RAG knowledge base, context manager, and task tracker that connects to Claude Code (and other AI coding assistants) via an MCP server. It lets you crawl docs, upload files, and manage tasks, all queryable by your AI agents at coding time. Deployed locally via Docker; each user runs their own instance.
 
-**Local-only deployment** - each user runs their own instance.
+**Status**: Cloned and forked. NOT yet running. Activation requires a Supabase project and Docker Desktop. See the Activation Steps section below.
 
-### Core Principles
+---
 
-- **No backwards compatibility; we follow a fix‑forward approach** — remove deprecated code immediately
-- **Detailed errors over graceful failures** - we want to identify and fix issues fast
-- **Break things to improve them** - beta is for rapid iteration
-- **Continuous improvement** - embrace change and learn from mistakes
-- **KISS** - keep it simple
-- **DRY** when appropriate
-- **YAGNI** — don't implement features that are not needed
+## Workflow Rules
 
-### Error Handling
+- **ALWAYS pull before working**: Run `git pull --rebase` before making any changes (both `origin` and check `upstream` for Archon updates).
+- **ALWAYS commit and push after making changes.** Stage specific files, commit with conventional commits, push immediately.
+- **Never use `git add .` or `git add -A`** — always add specific files by name.
+- Commit message format: conventional commits (feat:, fix:, chore:, docs:). Always include `Co-Authored-By: Claude <noreply@anthropic.com>`.
+- **Upstream sync**: `git fetch upstream && git merge upstream/main` to get Archon updates from Cole's repo.
 
-**Core Principle**: In beta, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
+---
 
-#### When to Fail Fast and Loud (Let it Crash!)
+## Tech Stack
 
-These errors should stop execution and bubble up immediately: (except for crawling flows)
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React + Vite + TypeScript + TailwindCSS (port 3737) |
+| **API Server** | FastAPI + Socket.IO + Python 3.12 (port 8181) |
+| **MCP Server** | Lightweight FastAPI HTTP wrapper (port 8051) |
+| **Agents Service** | PydanticAI agents for RAG/reranking (port 8052) |
+| **Agent Work Orders** *(optional)* | Claude Code CLI automation (port 8053) |
+| **Database** | Supabase (PostgreSQL + PGVector for embeddings) |
+| **Embeddings** | OpenAI (default), Gemini, or Ollama |
+| **Package mgr (BE)** | `uv` |
+| **Package mgr (FE)** | npm |
+| **Containerization** | Docker Compose |
 
-- **Service startup failures** - If credentials, database, or any service can't initialize, the system should crash with a clear error
-- **Missing configuration** - Missing environment variables or invalid settings should stop the system
-- **Database connection failures** - Don't hide connection issues, expose them
-- **Authentication/authorization failures** - Security errors must be visible and halt the operation
-- **Data corruption or validation errors** - Never silently accept bad data, Pydantic should raise
-- **Critical dependencies unavailable** - If a required service is down, fail immediately
-- **Invalid data that would corrupt state** - Never store zero embeddings, null foreign keys, or malformed JSON
+---
 
-#### When to Complete but Log Detailed Errors
+## Architecture
 
-These operations should continue but track and report failures clearly:
+### Microservices
 
-- **Batch processing** - When crawling websites or processing documents, complete what you can and report detailed failures for each item
-- **Background tasks** - Embedding generation, async jobs should finish the queue but log failures
-- **WebSocket events** - Don't crash on a single event failure, log it and continue serving other clients
-- **Optional features** - If projects/tasks are disabled, log and skip rather than crash
-- **External API calls** - Retry with exponential backoff, then fail with a clear message about what service failed and why
-
-#### Critical Nuance: Never Accept Corrupted Data
-
-When a process should continue despite failures, it must **skip the failed item entirely** rather than storing corrupted data
-
-#### Error Message Guidelines
-
-- Include context about what was being attempted when the error occurred
-- Preserve full stack traces with `exc_info=True` in Python logging
-- Use specific exception types, not generic Exception catching
-- Include relevant IDs, URLs, or data that helps debug the issue
-- Never return None/null to indicate failure - raise an exception with details
-- For batch operations, always report both success count and detailed failure list
-
-### Code Quality
-
-- Remove dead code immediately rather than maintaining it - no backward compatibility or legacy functions
-- Avoid backward compatibility mappings or legacy function wrappers
-- Fix forward
-- Focus on user experience and feature completeness
-- When updating code, don't reference what is changing (avoid keywords like SIMPLIFIED, ENHANCED, LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
-- When commenting on code in the codebase, only comment on the functionality and reasoning behind the code. Refrain from speaking to Archon being in "beta" or referencing anything else that comes from these global rules.
-
-## Development Commands
-
-### Frontend (archon-ui-main/)
-
-```bash
-npm run dev              # Start development server on port 3737
-npm run build            # Build for production
-npm run lint             # Run ESLint on legacy code (excludes /features)
-npm run lint:files path/to/file.tsx  # Lint specific files
-
-# Biome for /src/features directory only
-npm run biome            # Check features directory
-npm run biome:fix        # Auto-fix issues
-npm run biome:format     # Format code (120 char lines)
-npm run biome:ai         # Machine-readable JSON output for AI
-npm run biome:ai-fix     # Auto-fix with JSON output
-
-# Testing
-npm run test             # Run all tests in watch mode
-npm run test:ui          # Run with Vitest UI interface
-npm run test:coverage:stream  # Run once with streaming output
-vitest run src/features/projects  # Test specific directory
-
-# TypeScript
-npx tsc --noEmit         # Check all TypeScript errors
-npx tsc --noEmit 2>&1 | grep "src/features"  # Check features only
+```
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│  Frontend (UI)   │    │  Server (API)    │    │   MCP Server     │    │ Agents Service   │
+│  React + Vite    │◄──►│  FastAPI +       │◄──►│  MCP tools +     │◄──►│  PydanticAI,     │
+│  Port 3737       │    │  SocketIO        │    │  SSE/stdio       │    │  reranking       │
+│                  │    │  Port 8181       │    │  Port 8051       │    │  Port 8052       │
+└──────────────────┘    └──────────────────┘    └──────────────────┘    └──────────────────┘
+         │                       │                       │                        │
+         └───────────────────────┴───────────────────────┴────────────────────────┘
+                                           │
+                                  ┌─────────────────┐
+                                  │    Supabase      │
+                                  │  PostgreSQL +    │
+                                  │  PGVector        │
+                                  └─────────────────┘
 ```
 
-### Backend (python/)
+### Service Responsibilities
 
-```bash
-# Using uv package manager (preferred)
-uv sync --group all      # Install all dependencies
-uv run python -m src.server.main  # Run server locally on 8181
-uv run pytest            # Run all tests
-uv run pytest tests/test_api_essentials.py -v  # Run specific test
-uv run ruff check        # Run linter
-uv run ruff check --fix  # Auto-fix linting issues
-uv run mypy src/         # Type check
+| Service | Directory | Purpose |
+|---------|-----------|---------|
+| Frontend | `archon-ui-main/` | Dashboard, knowledge base UI, project management |
+| Server | `python/src/server/` | Core business logic, web crawling, doc processing |
+| MCP Server | `python/src/mcp/` | MCP protocol interface for AI clients |
+| Agents | `python/src/agents/` | Document + RAG agents, streaming responses |
+| Agent Work Orders | `python/src/agent_work_orders/` | Claude Code CLI workflow execution *(optional)* |
 
-# Agent Work Orders Service (independent microservice)
-make agent-work-orders  # Run agent work orders service locally on 8053
-# Or manually:
-uv run python -m uvicorn src.agent_work_orders.server:app --port 8053 --reload
+### Key Database Tables
 
-# Docker operations
-docker compose up --build -d       # Start all services
-docker compose --profile backend up -d  # Backend only (for hybrid dev)
-docker compose --profile work-orders up -d   # Include agent work orders service
-docker compose logs -f archon-server    # View server logs
-docker compose logs -f archon-mcp       # View MCP server logs
-docker compose logs -f archon-agent-work-orders  # View agent work orders service logs
-docker compose restart archon-server    # Restart after code changes
-docker compose down      # Stop all services
-docker compose down -v   # Stop and remove volumes
+- `sources` — crawled websites and uploaded documents
+- `documents` — chunked text with vector embeddings
+- `projects` — project management (optional feature)
+- `tasks` — todo/doing/review/done task tracker
+- `code_examples` — extracted code snippets for RAG
+
+---
+
+## Directory Structure
+
+```
+Archon/
+├── archon-ui-main/        # React + Vite frontend
+│   └── src/features/      # Vertical slice architecture
+├── python/
+│   └── src/
+│       ├── server/        # Core API + business logic
+│       ├── mcp/           # MCP server
+│       ├── agents/        # PydanticAI agents
+│       └── agent_work_orders/  # Optional workflow engine
+├── migration/
+│   ├── complete_setup.sql # Run once in Supabase to create all tables
+│   └── RESET_DB.sql       # Wipe Archon tables (destructive)
+├── PRPs/ai_docs/          # Architecture reference docs (ARCHITECTURE.md, etc.)
+├── docker-compose.yml     # Main service orchestration
+├── Makefile               # Developer shortcuts
+├── .env.example           # Template for all environment variables
+└── CLAUDE.md              # This file
 ```
 
-### Quick Workflows
+---
 
+## Activation Steps (Dormant → Running)
+
+Archon is currently **not running**. Follow these steps to activate:
+
+### Prerequisites
+- Docker Desktop installed and running
+- Supabase account (free tier works)
+- OpenAI API key (or Gemini/Ollama — configured later via UI)
+
+### Step 1: Create Supabase Project
+1. Go to [supabase.com/dashboard](https://supabase.com/dashboard) → New Project → name it "Archon"
+2. Wait for project to initialize (~2 min)
+3. Go to **Settings → API keys** and copy:
+   - **Project URL** (SUPABASE_URL)
+   - **service_role key** — the LONGER one (NOT the anon key — anon will break all saves)
+
+### Step 2: Run Database Migration
+1. In Supabase dashboard → **SQL Editor**
+2. Copy and paste the full contents of `migration/complete_setup.sql`
+3. Click Run — this creates all tables, functions, and policies
+
+### Step 3: Configure Environment
 ```bash
-# Hybrid development (recommended) - backend in Docker, frontend local
-make dev                 # Or manually: docker compose --profile backend up -d && cd archon-ui-main && npm run dev
+cd ~/Code/Archon
+cp .env.example .env
+# Edit .env and fill in:
+# SUPABASE_URL=https://your-project.supabase.co
+# SUPABASE_SERVICE_KEY=eyJ... (the long service_role key)
+```
+Store the Supabase credentials in 1Password under "Archon" before adding to `.env`.
+The `.env` file is gitignored — never commit it.
 
-# Hybrid with Agent Work Orders Service - backend in Docker, agent work orders local
-make dev-work-orders     # Starts backend in Docker, prompts to run agent service in separate terminal
-# Then in separate terminal:
-make agent-work-orders   # Start agent work orders service locally
+### Step 4: Start Services
+```bash
+docker compose up --build -d
+```
+This builds and starts all core containers: archon-ui (3737), archon-server (8181), archon-mcp (8051), archon-agents (8052).
 
-# Full Docker mode
-make dev-docker          # Or: docker compose up --build -d
-docker compose --profile work-orders up -d  # Include agent work orders service
+### Step 5: Complete Onboarding
+1. Open [http://localhost:3737](http://localhost:3737)
+2. Archon's onboarding flow will prompt for an LLM API key (OpenAI default)
+3. Store that API key in 1Password under "Archon → OpenAI Key" before entering it in the UI
 
-# All Local (3 terminals) - for agent work orders service development
-# Terminal 1: uv run python -m uvicorn src.server.main:app --port 8181 --reload
-# Terminal 2: make agent-work-orders
-# Terminal 3: cd archon-ui-main && npm run dev
+### Step 6: Connect to Claude Code
+1. In Archon UI → **MCP Dashboard** → copy the MCP connection config
+2. Add the config to `~/.claude/settings.json` under `mcpServers`
+3. Typical config:
+   ```json
+   "archon": {
+     "type": "sse",
+     "url": "http://localhost:8051/sse"
+   }
+   ```
+4. Restart Claude Code — Archon MCP tools will be available
 
-# Run linters before committing
-make lint                # Runs both frontend and backend linters
-make lint-fe             # Frontend only (ESLint + Biome)
-make lint-be             # Backend only (Ruff + MyPy)
-
-# Testing
-make test                # Run all tests
-make test-fe             # Frontend tests only
-make test-be             # Backend tests only
+### Verification
+```bash
+curl http://localhost:8181/health   # API server
+curl http://localhost:8051/health   # MCP server
 ```
 
-## Architecture Overview
+---
 
-@PRPs/ai_docs/ARCHITECTURE.md
+## Development Conventions
 
-#### TanStack Query Implementation
+- **CommonJS → no**: Python backend only. Frontend is ESM/TypeScript.
+- **Backend**: Python 3.12, `uv` package manager, 120-char line length
+- **Frontend**: TypeScript strict mode, Biome for `/src/features/`, ESLint for legacy `/src/components/`
+- **Architecture pattern**: Vertical slices in `/features` — each feature owns components, hooks, services, types
+- **Data fetching**: TanStack Query everywhere — no prop drilling, no direct API calls in components
+- **Service layer**: API Route → Service → Database (never skip the service layer)
+- **Error handling**: Fail fast and loud for startup/config/auth failures; continue with logging for batch ops
 
-For architecture and file references:
-@PRPs/ai_docs/DATA_FETCHING_ARCHITECTURE.md
-
-For code patterns and examples:
-@PRPs/ai_docs/QUERY_PATTERNS.md
-
-#### Service Layer Pattern
-
-See implementation examples:
-- API routes: `python/src/server/api_routes/projects_api.py`
-- Service layer: `python/src/server/services/project_service.py`
-- Pattern: API Route → Service → Database
-
-#### Error Handling Patterns
-
-See implementation examples:
-- Custom exceptions: `python/src/server/exceptions.py`
-- Exception handlers: `python/src/server/main.py` (search for @app.exception_handler)
-- Service error handling: `python/src/server/services/` (various services)
-
-## ETag Implementation
-
-@PRPs/ai_docs/ETAG_IMPLEMENTATION.md
-
-## Database Schema
-
-Key tables in Supabase:
-
-- `sources` - Crawled websites and uploaded documents
-  - Stores metadata, crawl status, and configuration
-- `documents` - Processed document chunks with embeddings
-  - Text chunks with vector embeddings for semantic search
-- `projects` - Project management (optional feature)
-  - Contains features array, documents, and metadata
-- `tasks` - Task tracking linked to projects
-  - Status: todo, doing, review, done
-  - Assignee: User, Archon, AI IDE Agent
-- `code_examples` - Extracted code snippets
-  - Language, summary, and relevance metadata
-
-## API Naming Conventions
-
-@PRPs/ai_docs/API_NAMING_CONVENTIONS.md
-
-Use database values directly (no FE mapping; type‑safe end‑to‑end from BE upward):
+---
 
 ## Environment Variables
 
-Required in `.env`:
+Required in `.env` (see `.env.example` for full reference):
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | Yes | Service role key (long key, not anon) |
+| `ANTHROPIC_API_KEY` | Optional | For Agent Work Orders feature |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Optional | Claude Code OAuth (alternative to API key) |
+| `GITHUB_PAT_TOKEN` | Optional | For Agent Work Orders PR creation |
+| `HOST` | No | Hostname (default: localhost) |
+| `ARCHON_UI_PORT` | No | UI port (default: 3737) |
+| `ARCHON_SERVER_PORT` | No | API port (default: 8181) |
+| `ARCHON_MCP_PORT` | No | MCP port (default: 8051) |
+| `ARCHON_AGENTS_PORT` | No | Agents port (default: 8052) |
+| `ENABLE_AGENT_WORK_ORDERS` | No | Enable optional workflow engine (default: false) |
+| `LOG_LEVEL` | No | Logging level (default: INFO) |
+
+All LLM API keys (OpenAI, Gemini, OpenRouter) and RAG settings are managed via the Archon Settings UI after startup — not in `.env`.
+
+---
+
+## Workflow (Common Operations)
 
 ```bash
-SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:8000 for local
-SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for cloud Supabase
+# Start all services
+docker compose up -d
+
+# Hybrid dev mode (backend Docker, frontend local with hot reload)
+make dev
+
+# Stop all services
+docker compose down
+
+# View logs
+docker compose logs -f archon-server
+docker compose logs -f archon-mcp
+
+# Rebuild after code changes
+docker compose up --build -d
+
+# Upgrade Archon (pull latest from upstream)
+git fetch upstream && git merge upstream/main
+docker compose up --build -d
+# Then check Settings → Database Migrations for any pending SQL
+
+# Backend linting
+cd python && uv run ruff check
+cd python && uv run mypy src/
+
+# Frontend linting
+cd archon-ui-main && npm run biome:fix
 ```
 
-Optional variables and full configuration:
-See `python/.env.example` for complete list
+---
 
-### Repository Configuration
+## Known Issues
 
-Repository information (owner, name) is centralized in `python/src/server/config/version.py`:
-- `GITHUB_REPO_OWNER` - GitHub repository owner (default: "coleam00")
-- `GITHUB_REPO_NAME` - GitHub repository name (default: "Archon")
+1. **Not yet activated** — Supabase project not created, `.env` not populated, Docker not started. See Activation Steps.
+2. **Beta software** — Archon is in beta. Expect rough edges. Cole's team follows fix-forward, no backward compat.
+3. **MCP context tax** — When connected, all Archon MCP tool schemas inject ~100-120 tokens per turn. Only connect when actively using the knowledge base. Disconnect from `settings.json` when not in use.
+4. **Service role key confusion** — Using the Supabase anon key instead of service_role key causes all saves to silently fail. Use the longer key labeled "service_role" in Supabase dashboard → API keys.
 
-This is the single source of truth for repository configuration. All services (version checking, bug reports, etc.) should import these constants rather than hardcoding repository URLs.
+---
 
-Environment variable override: `GITHUB_REPO="owner/repo"` can be set to override defaults.
+## Security
 
-## Common Development Tasks
+- `.env` is gitignored — never commit it
+- Store Supabase URL + service_role key in 1Password under "Archon" item
+- Store LLM API keys in 1Password (entered in Archon UI, stored encrypted in Supabase)
+- `ENABLE_DOCKER_SOCKET_MONITORING` defaults to `false` — keep it that way (Docker socket = root-equivalent host access)
+- MCP server runs on localhost only (port 8051) — not exposed to internet
 
-### Add a new API endpoint
+---
 
-1. Create route handler in `python/src/server/api_routes/`
-2. Add service logic in `python/src/server/services/`
-3. Include router in `python/src/server/main.py`
-4. Update frontend service in `archon-ui-main/src/features/[feature]/services/`
+## Subagent Orchestration
 
-### Add a new UI component in features directory
+| Subagent | When to Use |
+|----------|-------------|
+| **codebase-explorer** | Before modifying any service — understand how FastAPI routes, services, and TanStack Query hooks interact |
+| **browser-navigator** | To test the Archon UI locally once running |
+| **pre-push-validator** | Before pushing changes — verify no secrets leaked and types pass |
+| **security-scanner** | Before enabling Agent Work Orders feature — it executes Claude Code CLI commands |
 
-**IMPORTANT**: Review UI design standards in `@PRPs/ai_docs/UI_STANDARDS.md` before creating UI components.
+---
 
-1. Use Radix UI primitives from `src/features/ui/primitives/`
-2. Create component in relevant feature folder under `src/features/[feature]/components/`
-3. Define types in `src/features/[feature]/types/`
-4. Use TanStack Query hook from `src/features/[feature]/hooks/`
-5. Apply Tron-inspired glassmorphism styling with Tailwind
-6. Follow responsive design patterns (mobile-first with breakpoints)
-7. Ensure no dynamic Tailwind class construction (see UI_STANDARDS.md Section 2)
+## GSD + Teams Strategy
 
-### Add or modify MCP tools
+Not applicable for normal Archon usage — it's a third-party tool we're running, not building. For any customization or bug fixes, work directly in the main agent context; changes are typically isolated to one service.
 
-1. MCP tools are in `python/src/mcp_server/features/[feature]/[feature]_tools.py`
-2. Follow the pattern:
-   - `find_[resource]` - Handles list, search, and get single item operations
-   - `manage_[resource]` - Handles create, update, delete with an "action" parameter
-3. Register tools in the feature's `__init__.py` file
+If contributing significant features upstream, use GSD phases: plan → implement one service → test → PR.
 
-### Debug MCP connection issues
+---
 
-1. Check MCP health: `curl http://localhost:8051/health`
-2. View MCP logs: `docker compose logs archon-mcp`
-3. Test tool execution via UI MCP page
-4. Verify Supabase connection and credentials
+## MCP Connections
 
-### Fix TypeScript/Linting Issues
+This project IS an MCP server. When activated, Claude Code connects to it:
+- **Connection type**: SSE (Server-Sent Events)
+- **MCP URL**: `http://localhost:8051/sse`
+- **Add to**: `~/.claude/settings.json` → `mcpServers`
 
-```bash
-# TypeScript errors in features
-npx tsc --noEmit 2>&1 | grep "src/features"
+---
 
-# Biome auto-fix for features
-npm run biome:fix
+## Remotes
 
-# ESLint for legacy code
-npm run lint:files src/components/SomeComponent.tsx
-```
+- `origin` → `https://github.com/drzachconner/Archon.git` (personal fork)
+- `upstream` → `https://github.com/coleam00/Archon.git` (Cole's repo — pull updates from here)
 
-## Code Quality Standards
+---
 
-### Frontend
+## Completed Work
 
-- **TypeScript**: Strict mode enabled, no implicit any
-- **Biome** for `/src/features/`: 120 char lines, double quotes, trailing commas
-- **ESLint** for legacy code: Standard React rules
-- **Testing**: Vitest with React Testing Library
-
-### Backend
-
-- **Python 3.12** with 120 character line length
-- **Ruff** for linting - checks for errors, warnings, unused imports
-- **Mypy** for type checking - ensures type safety
-- **Pytest** for testing with async support
-
-## MCP Tools Available
-
-When connected to Claude/Cursor/Windsurf, the following tools are available:
-
-### Knowledge Base Tools
-
-- `archon:rag_search_knowledge_base` - Search knowledge base for relevant content
-- `archon:rag_search_code_examples` - Find code snippets in the knowledge base
-- `archon:rag_get_available_sources` - List available knowledge sources
-- `archon:rag_list_pages_for_source` - List all pages for a given source (browse documentation structure)
-- `archon:rag_read_full_page` - Retrieve full page content by page_id or URL
-
-### Project Management
-
-- `archon:find_projects` - Find all projects, search, or get specific project (by project_id)
-- `archon:manage_project` - Manage projects with actions: "create", "update", "delete"
-
-### Task Management
-
-- `archon:find_tasks` - Find tasks with search, filters, or get specific task (by task_id)
-- `archon:manage_task` - Manage tasks with actions: "create", "update", "delete"
-
-### Document Management
-
-- `archon:find_documents` - Find documents, search, or get specific document (by document_id)
-- `archon:manage_document` - Manage documents with actions: "create", "update", "delete"
-
-### Version Control
-
-- `archon:find_versions` - Find version history or get specific version
-- `archon:manage_version` - Manage versions with actions: "create", "restore"
-
-## Important Notes
-
-- Projects feature is optional - toggle in Settings UI
-- TanStack Query handles all data fetching; smart HTTP polling is used where appropriate (no WebSockets)
-- Frontend uses Vite proxy for API calls in development
-- Python backend uses `uv` for dependency management
-- Docker Compose handles service orchestration
-- TanStack Query for all data fetching - NO PROP DRILLING
-- Vertical slice architecture in `/features` - features own their sub-features
+- Cloned from `coleam00/Archon` (main branch)
+- CLAUDE.md created with all 14 standard sections
+- Forked to `drzachconner/Archon`
+- Upstream remote configured for receiving Cole's updates
