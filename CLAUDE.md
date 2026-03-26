@@ -284,3 +284,6 @@ This project IS an MCP server. When activated, Claude Code connects to it:
 - CLAUDE.md created with all 14 standard sections
 - Forked to `drzachconner/Archon`
 - Upstream remote configured for receiving Cole's updates
+
+## Google Workspace Account
+GWS Profile: `personal`
