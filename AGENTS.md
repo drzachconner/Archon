@@ -1,302 +1,182 @@
-# CLAUDE.md
+# Archon — Universal AI Agent Context
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## What This Project Is
 
-## Beta Development Guidelines
+A self-hosted RAG (Retrieval-Augmented Generation) knowledge base tool. Users crawl websites and upload documents; Archon chunks, embeds, and stores them in Supabase. An MCP server exposes the knowledge base to any AI coding assistant (Claude, Cursor, Windsurf, etc.) so agents can search it during coding sessions.
 
-**Local-only deployment** - each user runs their own instance.
+Local-only deployment — each user runs their own instance. Beta software: fix-forward, no backwards compatibility.
 
-### Core Principles
+## Tech Stack
 
-- **No backwards compatibility; we follow a fix‑forward approach** — remove deprecated code immediately
-- **Detailed errors over graceful failures** - we want to identify and fix issues fast
-- **Break things to improve them** - beta is for rapid iteration
-- **Continuous improvement** - embrace change and learn from mistakes
-- **KISS** - keep it simple
-- **DRY** when appropriate
-- **YAGNI** — don't implement features that are not needed
+| Layer | Technology |
+|-------|-----------|
+| Backend language | Python 3.12 |
+| Backend framework | FastAPI |
+| Package manager | `uv` |
+| Database + vectors | Supabase (PostgreSQL + pgvector) |
+| Frontend framework | React + TypeScript (Vite) |
+| UI components | Radix UI primitives |
+| Data fetching | TanStack Query |
+| Styling | Tailwind CSS (Tron-inspired glassmorphism) |
+| MCP server | Python (`mcp` library), runs alongside the API |
+| Linting (frontend) | Biome (features dir) + ESLint (legacy code) |
+| Linting (backend) | Ruff + Mypy |
+| Testing (frontend) | Vitest + React Testing Library |
+| Testing (backend) | Pytest (async) |
+| Container | Docker Compose |
 
-### Error Handling
+## Architecture
 
-**Core Principle**: In beta, we need to intelligently decide when to fail hard and fast to quickly address issues, and when to allow processes to complete in critical services despite failures. Read below carefully and make intelligent decisions on a case-by-case basis.
+```
+Archon/
+├── python/
+│   └── src/
+│       ├── server/
+│       │   ├── main.py               # FastAPI app, exception handlers, router includes
+│       │   ├── api_routes/           # Route handlers (thin — delegate to services)
+│       │   ├── services/             # Business logic layer
+│       │   ├── exceptions.py         # Custom exception types
+│       │   └── ...
+│       └── mcp_server/
+│           └── features/[feature]/   # MCP tools grouped by feature
+│               └── [feature]_tools.py
+└── archon-ui-main/
+    └── src/
+        ├── features/                 # Vertical slice — each feature owns components/hooks/types/services
+        │   ├── [feature]/
+        │   │   ├── components/
+        │   │   ├── hooks/            # TanStack Query hooks
+        │   │   ├── services/         # Frontend API calls
+        │   │   └── types/
+        │   └── ui/primitives/        # Shared Radix UI wrappers
+        └── components/               # Legacy (non-features) components
+```
 
-#### When to Fail Fast and Loud (Let it Crash!)
+**Request flow**: API Route → Service → Database (Supabase)
 
-These errors should stop execution and bubble up immediately: (except for crawling flows)
+**Data fetching rule**: TanStack Query everywhere in `/features`. No prop drilling. No direct fetch calls outside query hooks.
 
-- **Service startup failures** - If credentials, database, or any service can't initialize, the system should crash with a clear error
-- **Missing configuration** - Missing environment variables or invalid settings should stop the system
-- **Database connection failures** - Don't hide connection issues, expose them
-- **Authentication/authorization failures** - Security errors must be visible and halt the operation
-- **Data corruption or validation errors** - Never silently accept bad data, Pydantic should raise
-- **Critical dependencies unavailable** - If a required service is down, fail immediately
-- **Invalid data that would corrupt state** - Never store zero embeddings, null foreign keys, or malformed JSON
+## Database Schema (Supabase)
 
-#### When to Complete but Log Detailed Errors
+| Table | Purpose |
+|-------|---------|
+| `sources` | Crawled sites and uploaded docs — metadata, crawl status, config |
+| `documents` | Chunked text with vector embeddings for semantic search |
+| `projects` | Optional project management — features array, documents, metadata |
+| `tasks` | Task tracking linked to projects — status: todo/doing/review/done; assignee: User/Archon/AI IDE Agent |
+| `code_examples` | Extracted code snippets — language, summary, relevance metadata |
 
-These operations should continue but track and report failures clearly:
+## Environment Variables
 
-- **Batch processing** - When crawling websites or processing documents, complete what you can and report detailed failures for each item
-- **Background tasks** - Embedding generation, async jobs should finish the queue but log failures
-- **WebSocket events** - Don't crash on a single event failure, log it and continue serving other clients
-- **Optional features** - If projects/tasks are disabled, log and skip rather than crash
-- **External API calls** - Retry with exponential backoff, then fail with a clear message about what service failed and why
-
-#### Critical Nuance: Never Accept Corrupted Data
-
-When a process should continue despite failures, it must **skip the failed item entirely** rather than storing corrupted data
-
-#### Error Message Guidelines
-
-- Include context about what was being attempted when the error occurred
-- Preserve full stack traces with `exc_info=True` in Python logging
-- Use specific exception types, not generic Exception catching
-- Include relevant IDs, URLs, or data that helps debug the issue
-- Never return None/null to indicate failure - raise an exception with details
-- For batch operations, always report both success count and detailed failure list
-
-### Code Quality
-
-- Remove dead code immediately rather than maintaining it - no backward compatibility or legacy functions
-- Avoid backward compatibility mappings or legacy function wrappers
-- Fix forward
-- Focus on user experience and feature completeness
-- When updating code, don't reference what is changing (avoid keywords like SIMPLIFIED, ENHANCED, LEGACY, CHANGED, REMOVED), instead focus on comments that document just the functionality of the code
-- When commenting on code in the codebase, only comment on the functionality and reasoning behind the code. Refrain from speaking to Archon being in "beta" or referencing anything else that comes from these global rules.
-
-## Development Commands
-
-### Frontend (archon-ui-main/)
+Required in `python/.env`:
 
 ```bash
-npm run dev              # Start development server on port 3737
-npm run build            # Build for production
-npm run lint             # Run ESLint on legacy code (excludes /features)
-npm run lint:files path/to/file.tsx  # Lint specific files
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your-service-key-here
+```
 
-# Biome for /src/features directory only
-npm run biome            # Check features directory
-npm run biome:fix        # Auto-fix issues
-npm run biome:format     # Format code (120 char lines)
-npm run biome:ai         # Machine-readable JSON output for AI
-npm run biome:ai-fix     # Auto-fix with JSON output
+See `python/.env.example` for the full list of optional variables.
 
-# Testing
-npm run test             # Run all tests in watch mode
-npm run test:ui          # Run with Vitest UI interface
-npm run test:coverage:stream  # Run once with streaming output
-vitest run src/features/projects  # Test specific directory
+## Dev Commands
 
-# TypeScript
-npx tsc --noEmit         # Check all TypeScript errors
-npx tsc --noEmit 2>&1 | grep "src/features"  # Check features only
+### Recommended: Hybrid mode (backend in Docker, frontend local)
+
+```bash
+make dev
+# or manually:
+docker compose --profile backend up -d
+cd archon-ui-main && npm run dev
 ```
 
 ### Backend (python/)
 
 ```bash
-# Using uv package manager (preferred)
-uv sync --group all      # Install all dependencies
-uv run python -m src.server.main  # Run server locally on 8181
-uv run pytest            # Run all tests
-uv run pytest tests/test_api_essentials.py -v  # Run specific test
-uv run ruff check        # Run linter
-uv run ruff check --fix  # Auto-fix linting issues
-uv run mypy src/         # Type check
-
-# Docker operations
-docker compose up --build -d       # Start all services
-docker compose --profile backend up -d  # Backend only (for hybrid dev)
-docker compose logs -f archon-server   # View server logs
-docker compose logs -f archon-mcp      # View MCP server logs
-docker compose restart archon-server   # Restart after code changes
-docker compose down      # Stop all services
-docker compose down -v   # Stop and remove volumes
+uv sync --group all                          # Install dependencies
+uv run python -m src.server.main             # Run API on :8181
+uv run pytest                                # All tests
+uv run pytest tests/test_api_essentials.py -v
+uv run ruff check                            # Lint
+uv run ruff check --fix                      # Auto-fix
+uv run mypy src/                             # Type check
 ```
 
-### Quick Workflows
+### Frontend (archon-ui-main/)
 
 ```bash
-# Hybrid development (recommended) - backend in Docker, frontend local
-make dev                 # Or manually: docker compose --profile backend up -d && cd archon-ui-main && npm run dev
-
-# Full Docker mode
-make dev-docker          # Or: docker compose up --build -d
-
-# Run linters before committing
-make lint                # Runs both frontend and backend linters
-make lint-fe             # Frontend only (ESLint + Biome)
-make lint-be             # Backend only (Ruff + MyPy)
-
-# Testing
-make test                # Run all tests
-make test-fe             # Frontend tests only
-make test-be             # Backend tests only
+npm run dev                    # Dev server on :3737
+npm run build                  # Production build
+npm run biome:fix              # Auto-fix /src/features (Biome, 120-char lines)
+npm run lint                   # ESLint on legacy code
+npx tsc --noEmit               # TypeScript check (all)
+npx tsc --noEmit 2>&1 | grep "src/features"  # features only
+npm run test                   # Vitest watch mode
 ```
 
-## Architecture Overview
-
-@PRPs/ai_docs/ARCHITECTURE.md
-
-#### TanStack Query Implementation
-
-For architecture and file references:
-@PRPs/ai_docs/DATA_FETCHING_ARCHITECTURE.md
-
-For code patterns and examples:
-@PRPs/ai_docs/QUERY_PATTERNS.md
-
-#### Service Layer Pattern
-
-See implementation examples:
-
-- API routes: `python/src/server/api_routes/projects_api.py`
-- Service layer: `python/src/server/services/project_service.py`
-- Pattern: API Route → Service → Database
-
-#### Error Handling Patterns
-
-See implementation examples:
-
-- Custom exceptions: `python/src/server/exceptions.py`
-- Exception handlers: `python/src/server/main.py` (search for @app.exception_handler)
-- Service error handling: `python/src/server/services/` (various services)
-
-## ETag Implementation
-
-@PRPs/ai_docs/ETAG_IMPLEMENTATION.md
-
-## Database Schema
-
-Key tables in Supabase:
-
-- `sources` - Crawled websites and uploaded documents
-  - Stores metadata, crawl status, and configuration
-- `documents` - Processed document chunks with embeddings
-  - Text chunks with vector embeddings for semantic search
-- `projects` - Project management (optional feature)
-  - Contains features array, documents, and metadata
-- `tasks` - Task tracking linked to projects
-  - Status: todo, doing, review, done
-  - Assignee: User, Archon, AI IDE Agent
-- `code_examples` - Extracted code snippets
-  - Language, summary, and relevance metadata
-
-## API Naming Conventions
-
-@PRPs/ai_docs/API_NAMING_CONVENTIONS.md
-
-Use database values directly (no mapping in the FE typesafe from BE and up):
-
-## Environment Variables
-
-Required in `.env`:
+### Docker (full mode)
 
 ```bash
-SUPABASE_URL=https://your-project.supabase.co  # Or http://host.docker.internal:8000 for local
-SUPABASE_SERVICE_KEY=your-service-key-here      # Use legacy key format for cloud Supabase
+docker compose up --build -d
+docker compose logs -f archon-server
+docker compose logs -f archon-mcp
+docker compose restart archon-server
+docker compose down
 ```
 
-Optional variables and full configuration:
-See `python/.env.example` for complete list
+### Linting (both)
 
-## Common Development Tasks
+```bash
+make lint      # Frontend + backend
+make lint-fe   # ESLint + Biome
+make lint-be   # Ruff + Mypy
+```
 
-### Add a new API endpoint
+## Conventions
 
-1. Create route handler in `python/src/server/api_routes/`
-2. Add service logic in `python/src/server/services/`
+### Adding an API endpoint
+1. Route handler in `python/src/server/api_routes/`
+2. Service logic in `python/src/server/services/`
 3. Include router in `python/src/server/main.py`
-4. Update frontend service in `archon-ui-main/src/features/[feature]/services/`
+4. Frontend service in `archon-ui-main/src/features/[feature]/services/`
 
-### Add a new UI component in features directory
-
+### Adding a UI component (features dir)
 1. Use Radix UI primitives from `src/features/ui/primitives/`
-2. Create component in relevant feature folder under `src/features/[feature]/components/`
-3. Define types in `src/features/[feature]/types/`
-4. Use TanStack Query hook from `src/features/[feature]/hooks/`
-5. Apply Tron-inspired glassmorphism styling with Tailwind
+2. Component in `src/features/[feature]/components/`
+3. Types in `src/features/[feature]/types/`
+4. Data via TanStack Query hook in `src/features/[feature]/hooks/`
 
-### Add or modify MCP tools
+### Adding or modifying MCP tools
+1. Tools live in `python/src/mcp_server/features/[feature]/[feature]_tools.py`
+2. Name pattern: `find_[resource]` for list/search/get; `manage_[resource]` for create/update/delete
+3. Register in the feature's `__init__.py`
 
-1. MCP tools are in `python/src/mcp_server/features/[feature]/[feature]_tools.py`
-2. Follow the pattern:
-   - `find_[resource]` - Handles list, search, and get single item operations
-   - `manage_[resource]` - Handles create, update, delete with an "action" parameter
-3. Register tools in the feature's `__init__.py` file
+### Code style
+- Python: 120-char lines, specific exception types, never catch bare `Exception`, full stack traces with `exc_info=True`
+- TypeScript: strict mode, no implicit `any`, double quotes, trailing commas (Biome config)
+- Comments document functionality and reasoning only — no references to "beta" or change history
+- Never store zero embeddings, null foreign keys, or malformed JSON — skip failed items in batch ops rather than storing corrupted data
 
-### Debug MCP connection issues
+### API naming
+Use database column values directly in the API and frontend — no mapping layer between DB and FE types.
 
-1. Check MCP health: `curl http://localhost:8051/health`
-2. View MCP logs: `docker compose logs archon-mcp`
-3. Test tool execution via UI MCP page
-4. Verify Supabase connection and credentials
+## Key Files
 
-### Fix TypeScript/Linting Issues
+| File | Purpose |
+|------|---------|
+| `python/src/server/main.py` | FastAPI app entry point, exception handlers |
+| `python/src/server/exceptions.py` | Custom exception hierarchy |
+| `python/src/server/api_routes/projects_api.py` | Example route handler |
+| `python/src/server/services/project_service.py` | Example service |
+| `archon-ui-main/src/features/` | All new UI code lives here |
+| `PRPs/ai_docs/ARCHITECTURE.md` | Full architecture reference |
+| `PRPs/ai_docs/DATA_FETCHING_ARCHITECTURE.md` | TanStack Query patterns |
+| `PRPs/ai_docs/API_NAMING_CONVENTIONS.md` | API naming rules |
 
-```bash
-# TypeScript errors in features
-npx tsc --noEmit 2>&1 | grep "src/features"
+## What NOT to Touch
 
-# Biome auto-fix for features
-npm run biome:fix
+- `archon-ui-main/src/components/` (legacy) — add new code to `/features` instead
+- `.env` — never commit; use `python/.env.example` as the template
+- `docker-compose.yml` volume config — changing volumes requires `docker compose down -v` and data loss
 
-# ESLint for legacy code
-npm run lint:files src/components/SomeComponent.tsx
-```
+## Related
 
-## Code Quality Standards
-
-### Frontend
-
-- **TypeScript**: Strict mode enabled, no implicit any
-- **Biome** for `/src/features/`: 120 char lines, double quotes, trailing commas
-- **ESLint** for legacy code: Standard React rules
-- **Testing**: Vitest with React Testing Library
-
-### Backend
-
-- **Python 3.12** with 120 character line length
-- **Ruff** for linting - checks for errors, warnings, unused imports
-- **Mypy** for type checking - ensures type safety
-- **Pytest** for testing with async support
-
-## MCP Tools Available
-
-When connected to Claude/Cursor/Windsurf, the following tools are available:
-
-### Knowledge Base Tools
-
-- `archon:rag_search_knowledge_base` - Search knowledge base for relevant content
-- `archon:rag_search_code_examples` - Find code snippets in the knowledge base
-- `archon:rag_get_available_sources` - List available knowledge sources
-
-### Project Management
-
-- `archon:find_projects` - Find all projects, search, or get specific project (by project_id)
-- `archon:manage_project` - Manage projects with actions: "create", "update", "delete"
-
-### Task Management
-
-- `archon:find_tasks` - Find tasks with search, filters, or get specific task (by task_id)
-- `archon:manage_task` - Manage tasks with actions: "create", "update", "delete"
-
-### Document Management
-
-- `archon:find_documents` - Find documents, search, or get specific document (by document_id)
-- `archon:manage_document` - Manage documents with actions: "create", "update", "delete"
-
-### Version Control
-
-- `archon:find_versions` - Find version history or get specific version
-- `archon:manage_version` - Manage versions with actions: "create", "restore"
-
-## Important Notes
-
-- Projects feature is optional - toggle in Settings UI
-- HTTP polling handles all updates
-- Frontend uses Vite proxy for API calls in development
-- Python backend uses `uv` for dependency management
-- Docker Compose handles service orchestration
-- TanStack Query for all data fetching - NO PROP DRILLING
-- Vertical slice architecture in `/features` - features own their sub-features
+- See `CLAUDE.md` for Claude Code-specific configuration
